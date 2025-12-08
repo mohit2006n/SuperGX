@@ -32,7 +32,14 @@ class SuperGO {
 
     connect(deviceInfo) {
         this.myDevice = deviceInfo || { name: 'Unknown', type: 'desktop' };
-        this.socket = io('/', { transports: ['websocket'], upgrade: false });
+        // Allow polling fallback for cloud deployment (Render, Heroku, etc.)
+        this.socket = io('/', {
+            transports: ['websocket', 'polling'],
+            upgrade: true,
+            reconnection: true,
+            reconnectionAttempts: 10,
+            reconnectionDelay: 1000
+        });
 
         this.socket.on('connect', () => {
             this.socket.emit('register', this.myDevice);
