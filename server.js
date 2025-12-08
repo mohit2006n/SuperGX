@@ -13,6 +13,10 @@ const io = socketio(server, {
     maxHttpBufferSize: 500 * 1024 * 1024, // 500MB max for file chunks
     transports: ['websocket', 'polling'],
     allowEIO3: true,
+    cors: {
+        origin: '*',
+        methods: ['GET', 'POST']
+    }
 });
 
 // Main App (Socket.io + Static Files)

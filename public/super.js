@@ -336,10 +336,13 @@ class SuperGO {
             (window.location.protocol === 'https:' ? 443 : 80) :
             parseInt(window.location.port);
 
+        const isSecure = window.location.protocol === 'https:';
+
         this.state.peer = new Peer(peerId, {
             host: window.location.hostname,
             port: port,
             path: '/peerjs',
+            secure: isSecure,
             debug: 0,
             config: {
                 iceServers: [
@@ -361,9 +364,14 @@ class SuperGO {
         // This works on: localhost, production hosts (Vercel, Railway, etc)
         // Falls back on: devtunnels, some corporate proxies
         this.state.socket = io(this.config.signalServer, {
-            transports: ['websocket', 'polling'],
+            transports: ['websocket', 'polling'], // Try websocket first
             upgrade: true,
             rememberUpgrade: true
+        });
+
+        this.state.socket.on('connect_error', (err) => {
+            console.error('Socket connection error:', err);
+            this._emit('error', `Signaling server error: ${err.message}`);
         });
 
         this._setupSocketEvents();
