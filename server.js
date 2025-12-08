@@ -71,6 +71,31 @@ io.on('connection', (socket) => {
         });
     });
 
+    // ─────────────────────────────────────────────────────────────
+    // WebRTC Signaling (for P2P zero-latency transfer)
+    // ─────────────────────────────────────────────────────────────
+
+    socket.on('rtc-offer', (data) => {
+        io.to(data.targetId).emit('rtc-offer', {
+            senderId: socket.id,
+            offer: data.offer
+        });
+    });
+
+    socket.on('rtc-answer', (data) => {
+        io.to(data.targetId).emit('rtc-answer', {
+            senderId: socket.id,
+            answer: data.answer
+        });
+    });
+
+    socket.on('rtc-ice-candidate', (data) => {
+        io.to(data.targetId).emit('rtc-ice-candidate', {
+            senderId: socket.id,
+            candidate: data.candidate
+        });
+    });
+
     socket.on('disconnect', () => {
         console.log('Device disconnected:', socket.id);
         devices.delete(socket.id);
