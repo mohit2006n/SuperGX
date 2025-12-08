@@ -161,7 +161,8 @@ class SuperGO {
         this.pendingTargetId = null;
 
         const total = file.size;
-        const CHUNK_SIZE = 1024 * 1024; // 1MB
+        // 256KB chunks for cloud deployment (reduces latency)
+        const CHUNK_SIZE = 256 * 1024;
         let offset = 0;
         let lastYieldTime = performance.now();
         let lastUpdate = 0;
