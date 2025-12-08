@@ -24,10 +24,24 @@ class SuperGO {
         this._completedTransfers = new Set();
         this._events = {};
 
-        // ICE Servers (STUN for NAT traversal)
+        // P2P Mode indicator
+        this.isP2P = false;
+
+        // ICE Servers (STUN + TURN for NAT traversal)
         this.iceServers = [
             { urls: 'stun:stun.l.google.com:19302' },
-            { urls: 'stun:stun1.l.google.com:19302' }
+            { urls: 'stun:stun1.l.google.com:19302' },
+            // Free TURN server (OpenRelay)
+            {
+                urls: 'turn:openrelay.metered.ca:80',
+                username: 'openrelayproject',
+                credential: 'openrelayproject'
+            },
+            {
+                urls: 'turn:openrelay.metered.ca:443',
+                username: 'openrelayproject',
+                credential: 'openrelayproject'
+            }
         ];
     }
 
@@ -275,9 +289,12 @@ class SuperGO {
         try {
             // Try WebRTC first
             const channel = await this._getOrCreateDataChannel(targetId);
+            this.isP2P = true;
+            console.log('✓ WebRTC P2P connected - direct transfer');
             await this._sendViaDataChannel(targetId, file, channel);
         } catch (err) {
-            console.warn('WebRTC failed, falling back to Socket.io:', err.message);
+            console.warn('✗ WebRTC failed:', err.message, '- using server relay');
+            this.isP2P = false;
             // Fallback to Socket.io relay
             await this._sendViaSocket(targetId, file);
         }
@@ -291,7 +308,7 @@ class SuperGO {
         let smoothSpeed = 0;
         const startTime = Date.now();
 
-        this._emit('transferStarted', { targetId, fileName: file.name, total });
+        this._emit('transferStarted', { targetId, fileName: file.name, total, isP2P: true });
 
         while (offset < total) {
             if (!this.activeTransfer || this.activeTransfer.aborted) {
@@ -328,6 +345,15 @@ class SuperGO {
             // Yield every 16ms
             if (offset % (CHUNK_SIZE * 16) === 0) {
                 await new Promise(r => setTimeout(r, 0));
+            }
+
+            // Speed Limit (applies to WebRTC too)
+            if (this.maxSpeed > 0) {
+                const elapsed = (Date.now() - startTime) / 1000;
+                const expectedTime = offset / this.maxSpeed;
+                if (elapsed < expectedTime) {
+                    await new Promise(r => setTimeout(r, (expectedTime - elapsed) * 1000));
+                }
             }
         }
 
