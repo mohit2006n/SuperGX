@@ -3,146 +3,88 @@
 
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>SuperGO - Fast P2P File Transfer</title>
-    <link rel="icon" type="image/svg+xml" href="favicon.svg">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>SuperGO</title>
     <link rel="stylesheet" href="style.css">
+    <link rel="icon"
+        href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='50' fill='%230071e3'/><text x='50' y='65' font-size='50' text-anchor='middle' fill='white' font-family='sans-serif' font-weight='bold'>S</text></svg>">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap" rel="stylesheet">
     <script src="https://unpkg.com/@phosphor-icons/web"></script>
 </head>
 
 <body>
-    <main class="app-container">
-        <header class="app-header">
+    <main class="app">
+        <header class="header">
             <div class="logo">SuperGO</div>
+            <div id="status" class="status">
+                <span class="dot"></span>
+                <span class="text">Connecting</span>
+            </div>
         </header>
 
-        <!-- Landing View -->
-        <div id="landing-view" class="view">
-            <div class="landing-content">
-                <div class="hero">
-                    <h1>Share files instantly</h1>
-                    <p>Direct P2P transfer with end-to-end encryption</p>
+        <div class="layout-grid">
+            <!-- Sidebar: Devices -->
+            <aside class="sidebar">
+                <div class="section-header">
+                    <h2>Nearby</h2>
+                    <span id="device-count" class="badge"></span>
+                </div>
+                <div id="device-grid" class="device-grid">
+                    <!-- Devices injected here -->
+                </div>
+            </aside>
+
+            <!-- Main: Transfer Details -->
+            <main id="transfer-panel" class="details-panel empty">
+                <div class="panel-empty-state">
+                    <i class="ph ph-cursor-click"></i>
+                    <h3>Select a device</h3>
+                    <p>Choose a device from the list to start sharing</p>
                 </div>
 
-                <div class="form-section">
-                    <input type="text" id="name-input" placeholder="Your Name" class="input" maxlength="15">
-
-                    <!-- Room Access Toggle -->
-                    <div class="toggle-row">
-                        <span class="toggle-label">Room Access:</span>
-                        <div class="toggle-group">
-                            <label class="toggle-option">
-                                <input type="radio" name="access" value="public" checked>
-                                <span><i class="ph ph-globe"></i> Public</span>
-                            </label>
-                            <label class="toggle-option">
-                                <input type="radio" name="access" value="private">
-                                <span><i class="ph ph-lock"></i> Private</span>
-                            </label>
-                        </div>
+                <div class="panel-content hidden">
+                    <div class="transfer-header">
+                        <button id="back-btn" class="btn-icon mobile-only"><i class="ph ph-arrow-left"></i></button>
+                        <h2>Send to <span id="target-name">Device</span></h2>
                     </div>
 
-                    <div class="action-row">
-                        <button id="create-btn" class="btn btn-primary" disabled>
-                            <i class="ph ph-plus-circle"></i> Create Room
-                        </button>
-                        <div class="join-inline">
-                            <input type="text" id="code-input" placeholder="CODE" class="input code-input"
-                                maxlength="6">
-                            <button id="join-btn" class="btn btn-secondary" disabled>
-                                <i class="ph ph-arrow-right"></i>
-                            </button>
-                        </div>
+                    <div id="drop-zone" class="drop-zone">
+                        <i class="ph ph-file-arrow-up"></i>
+                        <p>Tap or drag file here</p>
+                    </div>
+                    <input type="file" id="file-input" hidden>
+
+                    <div class="transfer-list-header">History</div>
+                    <div id="transfer-list" class="transfer-list">
+                        <div id="empty-history" class="empty-history">No transfers yet</div>
                     </div>
                 </div>
-
-                <div class="rooms-section">
-                    <div class="section-label">Available Rooms</div>
-                    <div id="room-list" class="room-list">
-                        <div class="empty-state small">Searching...</div>
-                    </div>
-                </div>
-            </div>
+            </main>
         </div>
 
-        <!-- Room View -->
-        <div id="room-view" class="view hidden">
-            <div class="room-layout">
-                <!-- Sidebar -->
-                <aside class="sidebar">
-                    <div class="sidebar-section">
-                        <div class="section-label">Room Code</div>
-                        <div class="room-code-display">
-                            <span id="room-code">------</span>
-                            <button id="copy-btn" class="btn-icon" title="Copy">
-                                <i class="ph ph-copy"></i>
-                            </button>
-                        </div>
-                    </div>
-
-                    <div class="sidebar-section">
-                        <div class="section-label">Participants <span id="peer-count" class="badge">1</span></div>
-                        <div id="participant-list" class="participant-list">
-                            <!-- Populated by JS -->
-                        </div>
-                    </div>
-
-                    <button id="leave-btn" class="btn btn-ghost btn-sm">
-                        <i class="ph ph-sign-out"></i> Leave Room
-                    </button>
-                </aside>
-
-                <!-- Main Content -->
-                <div class="main-content">
-                    <div class="status-bar">
-                        <div class="e2e-badge">
-                            <i class="ph ph-shield-check"></i> DTLS 1.3 Encrypted
-                        </div>
-                        <div id="connection-status" class="status-indicator">
-                            <span class="dot"></span>
-                            <span class="text">Connecting...</span>
-                        </div>
-                    </div>
-
-                    <!-- Drop Zone -->
-                    <div id="drop-zone" class="drop-zone">
-                        <i class="ph ph-cloud-arrow-up"></i>
-                        <span>Drop files here to share</span>
-                        <button id="browse-btn" class="btn btn-ghost btn-sm">or browse files</button>
-                    </div>
-                    <input type="file" id="file-input" multiple hidden>
-
-                    <!-- File List -->
-                    <div id="file-section" class="file-section hidden">
-                        <div class="section-label">Files</div>
-                        <div id="file-list" class="file-list"></div>
-                        <div class="file-actions">
-                            <button id="stop-sharing-btn" class="btn btn-ghost hidden">
-                                <i class="ph ph-prohibit"></i> Stop Sharing
-                            </button>
-                            <button id="download-btn" class="btn btn-primary hidden">
-                                <i class="ph ph-download"></i> Download Selected
-                            </button>
-                        </div>
-                    </div>
-
-                    <div id="status-message" class="status-message hidden"></div>
+        <!-- Incoming -->
+        <div id="incoming-modal" class="modal hidden">
+            <div class="modal-content">
+                <i class="ph ph-file-arrow-down"></i>
+                <h3 id="incoming-sender">Someone</h3>
+                <p>wants to send you a file</p>
+                <div class="file-preview">
+                    <span id="incoming-filename">file.txt</span>
+                    <span id="incoming-size">0 KB</span>
+                </div>
+                <div class="modal-actions">
+                    <button id="reject-btn" class="btn">Decline</button>
+                    <button id="accept-btn" class="btn btn-primary">Accept</button>
                 </div>
             </div>
         </div>
     </main>
 
-    <!-- Toast Container -->
     <div id="toast-container"></div>
 
-    <!-- Libraries -->
     <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
-    <script src="https://unpkg.com/peerjs@1.5.0/dist/peerjs.min.js"></script>
-
-    <!-- App -->
     <script src="super.js"></script>
     <script src="app.js"></script>
 </body>

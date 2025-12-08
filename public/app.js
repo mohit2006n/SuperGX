@@ -1,386 +1,425 @@
 /**
- * SuperGO UI Application
- * Minimal UI layer for the SuperGO P2P engine
+ * SuperGO App - Production Grade
+ * All edge cases handled.
  */
 
-const engine = new SuperGO();
-
-// DOM Elements
+// Init Engine (150 MB/s limit)
+const supergo = new SuperGO({ maxSpeed: 150 * 1024 * 1024 });
 const $ = id => document.getElementById(id);
-const elements = {
-    // Views
-    landingView: $('landing-view'),
-    roomView: $('room-view'),
 
-    // Landing
-    nameInput: $('name-input'),
-    createBtn: $('create-btn'),
-    codeInput: $('code-input'),
-    joinBtn: $('join-btn'),
-    roomList: $('room-list'),
-
-    // Room
-    roomCode: $('room-code'),
-    copyBtn: $('copy-btn'),
-    peerCount: $('peer-count'),
-    participantList: $('participant-list'),
-    leaveBtn: $('leave-btn'),
-    connectionStatus: $('connection-status'),
+// DOM Cache
+const el = {
+    status: $('status'),
+    deviceCount: $('device-count'),
+    deviceGrid: $('device-grid'),
+    transferPanel: $('transfer-panel'),
+    backBtn: $('back-btn'),
+    targetName: $('target-name'),
     dropZone: $('drop-zone'),
-    browseBtn: $('browse-btn'),
     fileInput: $('file-input'),
-    fileSection: $('file-section'),
-    fileList: $('file-list'),
-    downloadBtn: $('download-btn'),
-    stopSharingBtn: $('stop-sharing-btn'),
-    statusMessage: $('status-message')
+    transferList: $('transfer-list'),
+    emptyHistory: $('empty-history'),
+    incomingModal: $('incoming-modal'),
+    incomingSender: $('incoming-sender'),
+    incomingFilename: $('incoming-filename'),
+    acceptBtn: $('accept-btn'),
+    rejectBtn: $('reject-btn')
 };
 
+// State
+let selectedDeviceId = null;
+let hasConnectedOnce = false;
+const transferHistory = new Map(); // deviceId -> Array<Transfer>
+const toastHistory = new Map();
+
 // ─────────────────────────────────────────────────────────────
-// LANDING SCREEN
+// UI HELPERS
 // ─────────────────────────────────────────────────────────────
 
-function validateLanding() {
-    const name = elements.nameInput.value.trim();
-    const code = elements.codeInput.value.trim();
-    elements.createBtn.disabled = name.length === 0;
-    elements.joinBtn.disabled = name.length === 0 || code.length < 4;
+const ui = {
+    setStatus(state, text) {
+        const dot = el.status.querySelector('.dot');
+        const label = el.status.querySelector('.text');
+        dot.className = 'dot ' + (state === 'online' ? 'green' : 'red');
+        label.textContent = text;
+    },
+
+    openPanel(device) {
+        selectedDeviceId = device.id;
+        el.targetName.textContent = device.name;
+        el.targetName.style.opacity = '1';
+        el.transferPanel.classList.remove('empty');
+        el.transferPanel.classList.add('active');
+
+        const content = el.transferPanel.querySelector('.panel-content');
+        if (content) content.classList.remove('hidden');
+
+        renderTransferList(device.id);
+        updateDropZoneState();
+
+        document.querySelectorAll('.device-card').forEach(c =>
+            c.classList.toggle('active', c.dataset.id === device.id));
+    },
+
+    closePanel() {
+        selectedDeviceId = null;
+        el.transferPanel.classList.remove('active');
+        el.transferPanel.classList.add('empty');
+
+        const content = el.transferPanel.querySelector('.panel-content');
+        if (content) content.classList.add('hidden');
+
+        document.querySelectorAll('.device-card').forEach(c => c.classList.remove('active'));
+    },
+
+    formatBytes(bytes) {
+        if (!bytes) return '0 B';
+        const i = Math.floor(Math.log(bytes) / Math.log(1024));
+        return parseFloat((bytes / Math.pow(1024, i)).toFixed(1)) + ' ' + ['B', 'KB', 'MB', 'GB'][i];
+    },
+
+    showToast(msg, type = 'info') {
+        const now = Date.now();
+        if (toastHistory.has(msg) && now - toastHistory.get(msg) < 2000) return;
+        toastHistory.set(msg, now);
+
+        const t = document.createElement('div');
+        t.className = `toast ${type}`;
+        t.innerHTML = `<span>${msg}</span>`;
+        $('toast-container').appendChild(t);
+
+        setTimeout(() => {
+            t.classList.add('hiding');
+            setTimeout(() => t.remove(), 200);
+        }, 3000);
+    }
+};
+
+// Update drop zone based on busy state
+function updateDropZoneState() {
+    const busy = supergo.isBusy;
+    el.dropZone.style.opacity = busy ? '0.5' : '1';
+    el.dropZone.style.pointerEvents = busy ? 'none' : 'auto';
 }
 
-elements.nameInput.oninput = validateLanding;
-elements.codeInput.oninput = (e) => {
-    e.target.value = e.target.value.toUpperCase();
-    validateLanding();
-};
+// ─────────────────────────────────────────────────────────────
+// CORE LOGIC
+// ─────────────────────────────────────────────────────────────
 
-elements.createBtn.onclick = () => {
-    const name = elements.nameInput.value.trim();
-    const accessRadio = document.querySelector('input[name="access"]:checked');
-    const access = accessRadio ? accessRadio.value : 'public';
-    const roomId = engine.createRoom(name, { access });
-    enterRoom(roomId);
-};
+// Device Detection
+const ua = navigator.userAgent;
+const deviceName =
+    /iPhone/.test(ua) ? 'iPhone' :
+        /iPad/.test(ua) ? 'iPad' :
+            /Android/.test(ua) ? 'Android' :
+                /Mac/.test(ua) ? 'Mac' :
+                    /Windows/.test(ua) ? 'Windows PC' : 'Desktop';
+const deviceType = /Mobile|Android|iPhone/.test(ua) ? 'phone' : 'desktop';
 
-elements.joinBtn.onclick = () => {
-    const name = elements.nameInput.value.trim();
-    const code = elements.codeInput.value.trim();
-    engine.joinRoom(code, name);
-    enterRoom(code);
-};
+supergo.connect({ name: deviceName, type: deviceType });
 
-// Room Discovery
-engine.on('roomsUpdated', (sessions) => {
-    if (sessions.length === 0) {
-        elements.roomList.innerHTML = '<div class="empty-state small">No public rooms available</div>';
-        return;
-    }
+// ─────────────────────────────────────────────────────────────
+// CONNECTION EVENTS
+// ─────────────────────────────────────────────────────────────
 
-    elements.roomList.innerHTML = sessions.map(s => {
-        if (s.isSecure) {
-            return `
-                <div class="room-item private">
-                    <i class="ph ph-lock"></i>
-                    <span class="host">${s.hostName}</span>
-                    <span class="label">Private</span>
-                </div>`;
+supergo.on('connected', (device) => {
+    hasConnectedOnce = true;
+    ui.setStatus('online', 'Online');
+    document.querySelector('.header .logo').innerHTML =
+        `SuperGO <span style="font-size:12px;color:var(--md-sys-color-outline);margin-left:8px;font-weight:400">${device.name}</span>`;
+});
+
+supergo.on('disconnected', () => {
+    ui.setStatus('offline', 'Disconnected');
+    if (hasConnectedOnce) ui.showToast('Connection lost. Reconnecting...', 'error');
+
+    // EDGE CASE: Close modal if open (sender might have disconnected)
+    el.incomingModal.classList.remove('visible');
+
+    // Reset UI state
+    updateDropZoneState();
+});
+
+// ─────────────────────────────────────────────────────────────
+// DEVICE LIST
+// ─────────────────────────────────────────────────────────────
+
+supergo.on('devicesUpdated', (devices) => {
+    el.deviceCount.textContent = devices.length ? `${devices.length}` : '';
+
+    if (!devices.length) {
+        if (!el.deviceGrid.querySelector('.empty-state')) {
+            el.deviceGrid.innerHTML = `<div class="empty-state"><i class="ph ph-broadcast"></i><p>Scanning for devices...</p></div>`;
         }
-        return `
-            <div class="room-item" data-id="${s.id}">
-                <i class="ph ph-globe"></i>
-                <span class="host">${s.hostName}</span>
-                <span class="code">${s.id}</span>
-                <i class="ph ph-arrow-right join-arrow"></i>
-            </div>`;
-    }).join('');
-
-    // Click handlers for public rooms
-    elements.roomList.querySelectorAll('.room-item[data-id]').forEach(item => {
-        item.onclick = () => {
-            const id = item.dataset.id;
-            elements.codeInput.value = id;
-            validateLanding();
-            if (elements.nameInput.value.trim()) {
-                elements.joinBtn.click();
-            } else {
-                elements.nameInput.focus();
-                showToast('Enter your name first', 'info');
-            }
-        };
-    });
-});
-
-// Start discovering rooms
-engine.discoverRooms();
-
-// ─────────────────────────────────────────────────────────────
-// ROOM SCREEN
-// ─────────────────────────────────────────────────────────────
-
-function enterRoom(roomId) {
-    elements.landingView.classList.add('hidden');
-    elements.roomView.classList.remove('hidden');
-    elements.roomCode.textContent = roomId;
-    setConnectionStatus('connecting');
-}
-
-function exitRoom() {
-    engine.leaveRoom();
-    elements.roomView.classList.add('hidden');
-    elements.landingView.classList.remove('hidden');
-    elements.codeInput.value = '';
-    elements.fileSection.classList.add('hidden');
-    elements.fileList.innerHTML = '';
-    engine.discoverRooms();
-}
-
-elements.leaveBtn.onclick = exitRoom;
-
-elements.copyBtn.onclick = async () => {
-    try {
-        await navigator.clipboard.writeText(elements.roomCode.textContent);
-        showToast('Room code copied!', 'success');
-    } catch (err) {
-        showToast('Unable to copy to clipboard', 'error');
-        console.error('Copy failed:', err);
-    }
-};
-
-// Connection Status
-function setConnectionStatus(state) {
-    const dot = elements.connectionStatus.querySelector('.dot');
-    const text = elements.connectionStatus.querySelector('.text');
-
-    dot.className = 'dot';
-    switch (state) {
-        case 'connecting':
-            text.textContent = 'Connecting...';
-            dot.classList.add('yellow');
-            break;
-        case 'online':
-            text.textContent = 'Online';
-            dot.classList.add('green');
-            break;
-        case 'connected':
-            text.textContent = 'Connected';
-            dot.classList.add('blue');
-            break;
-        case 'disconnected':
-        case 'error':
-            text.textContent = 'Disconnected';
-            dot.classList.add('red');
-            break;
-    }
-}
-
-engine.on('ready', () => setConnectionStatus('online'));
-engine.on('connected', () => setConnectionStatus('connected'));
-engine.on('peerJoined', () => setConnectionStatus('connected'));
-engine.on('peerLeft', ({ peerId }) => {
-    if (engine.peerCount === 0) setConnectionStatus('online');
-});
-engine.on('disconnected', () => {
-    setConnectionStatus('disconnected');
-    showToast('Connection lost. Reconnecting...', 'error');
-});
-
-// Participants
-engine.on('participantsUpdated', (participants) => {
-    elements.peerCount.textContent = participants.length;
-
-    // Filter out self to check if room is "empty" of other peers
-    const others = participants.filter(p => !p.isSelf);
-
-    if (others.length === 0) {
-        elements.participantList.innerHTML = `
-            <div class="empty-state small">
-                <i class="ph ph-users" style="font-size: 24px; margin-bottom: 8px; opacity: 0.5;"></i>
-                <div>Waiting for others to join...</div>
-            </div>
-            ${renderParticipant(participants.find(p => p.isSelf))}
-        `;
-    } else {
-        elements.participantList.innerHTML = participants.map(renderParticipant).join('');
-    }
-});
-
-function renderParticipant(p) {
-    if (!p) return '';
-    return `
-        <div class="participant ${p.isSelf ? 'self' : ''}">
-            <div class="avatar">${p.name.substring(0, 2).toUpperCase()}</div>
-            <span class="name">${p.name}${p.isSelf ? ' (You)' : ''}</span>
-            ${p.isHost ? '<span class="role">HOST</span>' : ''}
-        </div>
-    `;
-}
-
-// ─────────────────────────────────────────────────────────────
-// FILE HANDLING
-// ─────────────────────────────────────────────────────────────
-
-// Drag & Drop
-['dragenter', 'dragover', 'dragleave', 'drop'].forEach(evt => {
-    elements.dropZone.addEventListener(evt, e => e.preventDefault());
-});
-
-elements.dropZone.addEventListener('dragover', () => elements.dropZone.classList.add('active'));
-elements.dropZone.addEventListener('dragleave', () => elements.dropZone.classList.remove('active'));
-elements.dropZone.addEventListener('drop', (e) => {
-    elements.dropZone.classList.remove('active');
-    if (e.dataTransfer.files.length) {
-        engine.addFiles(e.dataTransfer.files);
-    }
-});
-
-elements.browseBtn.onclick = () => elements.fileInput.click();
-elements.fileInput.onchange = () => {
-    if (elements.fileInput.files.length) {
-        engine.addFiles(elements.fileInput.files);
-        elements.fileInput.value = '';
-    }
-};
-
-// File List
-engine.on('filesAvailable', (files) => {
-    elements.fileSection.classList.remove('hidden');
-
-    if (files.length === 0) {
-        elements.fileList.innerHTML = `
-            <div class="empty-state">
-                <i class="ph ph-files" style="font-size: 32px; margin-bottom: 12px; opacity: 0.3;"></i>
-                <div>No files shared yet</div>
-                <div style="font-size: 12px; opacity: 0.7; margin-top: 4px">Drop files above to start sharing</div>
-            </div>
-        `;
-        updateButtons();
         return;
     }
 
-    const myFiles = files.filter(f => f.isLocal);
-    const remoteFiles = files.filter(f => !f.isLocal);
+    if (el.deviceGrid.querySelector('.empty-state')) el.deviceGrid.innerHTML = '';
 
-    elements.fileList.innerHTML = files.map(f => `
-        <div class="file-item ${f.isLocal ? 'local' : ''}" data-index="${f.index}" data-peer="${f.peerId}" data-local="${f.isLocal}">
-            <input type="checkbox" class="file-check" ${f.isLocal ? '' : 'checked'}>
-            <i class="ph ${f.isLocal ? 'ph-file' : 'ph-file-arrow-down'}"></i>
-            <div class="file-info">
-                <div class="file-name">${f.name}</div>
-                <div class="file-meta">
-                    ${formatBytes(f.size)} · ${f.senderName}
-                    ${f.isLocal ? '<span class="tag shared">Sharing</span>' : ''}
+    const currentMap = new Map();
+    el.deviceGrid.querySelectorAll('.device-card').forEach(c => currentMap.set(c.dataset.id, c));
+
+    // Update/Create cards
+    devices.forEach(d => {
+        let card = currentMap.get(d.id);
+        const icon = d.type === 'phone' ? 'device-mobile' : 'desktop';
+
+        if (card) {
+            const nameEl = card.querySelector('.device-name');
+            if (nameEl.textContent !== d.name) nameEl.textContent = d.name;
+            card.classList.toggle('active', selectedDeviceId === d.id);
+            currentMap.delete(d.id);
+        } else {
+            card = document.createElement('div');
+            card.className = 'device-card';
+            card.dataset.id = d.id;
+            card.onclick = () => ui.openPanel(d);
+            card.innerHTML = `
+                <div class="device-icon"><i class="ph ph-${icon}"></i></div>
+                <div class="device-info">
+                    <div class="device-name">${d.name}</div>
+                    <div class="device-status">Tap to send</div>
                 </div>
+            `;
+            el.deviceGrid.appendChild(card);
+        }
+    });
+
+    // Remove stale cards
+    currentMap.forEach(c => c.remove());
+
+    // Update active panel state
+    if (selectedDeviceId) {
+        const active = devices.find(d => d.id === selectedDeviceId);
+        if (active) {
+            el.targetName.style.opacity = '1';
+            updateDropZoneState();
+        } else {
+            // EDGE CASE: Selected device disconnected
+            el.targetName.textContent = 'Device Disconnected';
+            el.targetName.style.opacity = '0.5';
+            el.dropZone.style.pointerEvents = 'none';
+            el.dropZone.style.opacity = '0.5';
+        }
+    }
+});
+
+// ─────────────────────────────────────────────────────────────
+// TRANSFER HISTORY
+// ─────────────────────────────────────────────────────────────
+
+function addTransferRecord(deviceId, data) {
+    if (!transferHistory.has(deviceId)) transferHistory.set(deviceId, []);
+    const list = transferHistory.get(deviceId);
+
+    if (list.length > 50) list.pop(); // Memory cap
+    list.unshift(data);
+
+    if (selectedDeviceId === deviceId) renderTransferList(deviceId);
+}
+
+function updateActiveTransfer(deviceId, updates) {
+    const list = transferHistory.get(deviceId);
+    if (!list) return;
+
+    const t = list.find(x => x.status === 'sending' || x.status === 'receiving');
+    if (!t) return;
+
+    Object.assign(t, updates);
+
+    // Surgical DOM Update
+    if (selectedDeviceId === deviceId) {
+        const row = document.getElementById(`tx-${t.id}`);
+        if (row) {
+            const meta = row.querySelector('.transfer-meta');
+            if (updates.status === 'completed') {
+                meta.innerHTML = `<span style="color:var(--md-sys-color-success)">✓ Completed</span>`;
+                const bar = row.querySelector('.transfer-progress-bar');
+                if (bar) bar.remove();
+            } else if (updates.status === 'error') {
+                meta.innerHTML = `<span style="color:var(--md-sys-color-error)">✕ Failed</span>`;
+                const bar = row.querySelector('.transfer-progress-bar');
+                if (bar) bar.remove();
+            } else if (updates.percent !== undefined) {
+                meta.textContent = `${updates.percent}% · ${ui.formatBytes(updates.speed)}/s`;
+                const bar = row.querySelector('.transfer-progress-fill');
+                if (bar) bar.style.width = `${updates.percent}%`;
+            }
+        } else {
+            renderTransferList(deviceId);
+        }
+    }
+}
+
+function renderTransferList(deviceId) {
+    const list = transferHistory.get(deviceId) || [];
+    if (!list.length) {
+        el.transferList.innerHTML = '';
+        el.transferList.appendChild(el.emptyHistory);
+        el.emptyHistory.style.display = 'block';
+        return;
+    }
+
+    el.emptyHistory.style.display = 'none';
+    el.transferList.innerHTML = list.map(t => {
+        const isOut = t.direction === 'outgoing';
+        const icon = isOut ? 'arrow-up' : 'arrow-down';
+        const cls = isOut ? 'sending' : 'receiving';
+
+        let metaHtml = '';
+        if (t.status === 'completed') metaHtml = '<span style="color:var(--md-sys-color-success)">✓ Completed</span>';
+        else if (t.status === 'error') metaHtml = '<span style="color:var(--md-sys-color-error)">✕ Failed</span>';
+        else metaHtml = `${t.percent || 0}% · 0 B/s`;
+
+        const showBar = t.status === 'sending' || t.status === 'receiving';
+
+        return `
+        <div class="transfer-item" id="tx-${t.id}">
+            <div class="transfer-icon ${cls}"><i class="ph ph-${icon}"></i></div>
+            <div class="transfer-details">
+                <div class="transfer-name">${t.fileName}</div>
+                <div class="transfer-meta">${metaHtml}</div>
+                ${showBar ? `<div class="transfer-progress-bar"><div class="transfer-progress-fill" style="width:${t.percent || 0}%"></div></div>` : ''}
             </div>
-            <div class="file-status" id="status-${f.peerId}-${f.index}"></div>
-        </div>
-    `).join('');
-
-    updateButtons();
-
-    // Checkbox handlers
-    elements.fileList.querySelectorAll('.file-check').forEach(cb => {
-        cb.onchange = updateButtons;
-    });
-});
-
-function updateButtons() {
-    // Download button for remote files
-    const remoteChecked = elements.fileList.querySelectorAll('.file-item:not(.local) .file-check:checked');
-    if (remoteChecked.length > 0) {
-        elements.downloadBtn.classList.remove('hidden');
-        elements.downloadBtn.innerHTML = `<i class="ph ph-download"></i> Download (${remoteChecked.length})`;
-    } else {
-        elements.downloadBtn.classList.add('hidden');
-    }
-
-    // Stop sharing button for local files
-    const localChecked = elements.fileList.querySelectorAll('.file-item.local .file-check:checked');
-    if (localChecked.length > 0) {
-        elements.stopSharingBtn.classList.remove('hidden');
-        elements.stopSharingBtn.innerHTML = `<i class="ph ph-prohibit"></i> Stop Sharing (${localChecked.length})`;
-    } else {
-        elements.stopSharingBtn.classList.add('hidden');
-    }
+        </div>`;
+    }).join('');
 }
 
-elements.downloadBtn.onclick = () => {
-    const requests = Array.from(elements.fileList.querySelectorAll('.file-item:not(.local) .file-check:checked')).map(cb => {
-        const item = cb.closest('.file-item');
-        return {
-            peerId: item.dataset.peer,
-            fileIndex: parseInt(item.dataset.index)
-        };
+// ─────────────────────────────────────────────────────────────
+// SENDING
+// ─────────────────────────────────────────────────────────────
+
+const startSend = (file) => {
+    // EDGE CASE: No target selected
+    if (!selectedDeviceId) {
+        ui.showToast('Select a device first', 'error');
+        return;
+    }
+    // EDGE CASE: Empty file
+    if (!file || !file.size) {
+        ui.showToast('Cannot send empty file', 'error');
+        return;
+    }
+    // EDGE CASE: Already busy
+    if (supergo.isBusy) {
+        ui.showToast('Transfer in progress', 'error');
+        return;
+    }
+
+    supergo.sendFile(selectedDeviceId, file);
+    updateDropZoneState();
+};
+
+el.dropZone.onclick = () => {
+    if (!supergo.isBusy) el.fileInput.click();
+};
+el.fileInput.onchange = () => {
+    if (el.fileInput.files[0]) startSend(el.fileInput.files[0]);
+    el.fileInput.value = '';
+};
+
+['dragenter', 'dragover', 'dragleave', 'drop'].forEach(e => {
+    el.dropZone.addEventListener(e, ev => { ev.preventDefault(); ev.stopPropagation(); });
+});
+el.dropZone.addEventListener('drop', e => {
+    if (!supergo.isBusy && e.dataTransfer.files[0]) startSend(e.dataTransfer.files[0]);
+});
+
+supergo.on('transferPending', ({ targetId }) => {
+    // Waiting for acceptance...
+    updateDropZoneState();
+});
+
+supergo.on('transferStarted', ({ targetId, fileName, total }) => {
+    addTransferRecord(targetId, {
+        id: Date.now(), fileName, size: total,
+        direction: 'outgoing', status: 'sending', percent: 0
     });
-    if (requests.length > 0) {
-        engine.downloadFiles(requests);
-        showToast(`Downloading ${requests.length} file(s)...`, 'info');
-    }
-};
-
-elements.stopSharingBtn.onclick = () => {
-    const indices = Array.from(elements.fileList.querySelectorAll('.file-item.local .file-check:checked'))
-        .map(cb => parseInt(cb.closest('.file-item').dataset.index));
-    if (indices.length > 0) {
-        engine.removeFiles(indices);
-        showToast(`Stopped sharing ${indices.length} file(s)`, 'info');
-    }
-};
-
-// Progress
-engine.on('progress', ({ fileIndex, peerId, percent, speed }) => {
-    const el = $(`status-${peerId}-${fileIndex}`);
-    if (el) {
-        el.innerHTML = `<span class="progress-text">${percent}% · ${formatBytes(speed)}/s</span>`;
-    }
+    updateDropZoneState();
 });
 
-engine.on('complete', ({ fileIndex, peerId, name }) => {
-    const el = $(`status-${peerId}-${fileIndex}`);
-    if (el) {
-        el.innerHTML = '<i class="ph ph-check-circle" style="color: #10b981"></i>';
-    }
-    showToast(`Downloaded: ${name}`, 'success');
+supergo.on('transferProgress', d => {
+    updateActiveTransfer(d.targetId, { percent: d.percent, speed: d.speed });
 });
 
-engine.on('transferCancelled', ({ fileIndex, peerId }) => {
-    const el = $(`status-${peerId}-${fileIndex}`);
-    if (el) {
-        el.innerHTML = '<span style="color: var(--muted)">Cancelled</span>';
-    }
+supergo.on('transferComplete', ({ targetId, fileName }) => {
+    updateActiveTransfer(targetId, { status: 'completed', percent: 100 });
+    updateDropZoneState();
+    ui.showToast(`${fileName} sent`, 'success');
 });
 
-engine.on('error', (msg) => {
-    showToast(msg, 'error');
-    if (msg.includes('not found') || msg.includes('disconnected')) {
-        exitRoom();
+supergo.on('transferError', ({ targetId, senderId, error }) => {
+    const deviceId = targetId || senderId;
+    if (deviceId) {
+        updateActiveTransfer(deviceId, { status: 'error' });
     }
+    updateDropZoneState();
+    ui.showToast(error || 'Transfer failed', 'error');
+});
+
+supergo.on('transferRejected', ({ reason }) => {
+    updateDropZoneState();
+    ui.showToast(reason || 'Transfer rejected', 'error');
 });
 
 // ─────────────────────────────────────────────────────────────
-// UTILITIES
+// RECEIVING
 // ─────────────────────────────────────────────────────────────
 
-function formatBytes(bytes) {
-    if (bytes === 0) return '0 B';
-    const k = 1024;
-    const sizes = ['B', 'KB', 'MB', 'GB'];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
-}
+supergo.on('incomingFile', (data) => {
+    el.incomingSender.textContent = `from ${data.senderName || 'Unknown'}`;
+    el.incomingFilename.textContent = `${data.fileName} (${ui.formatBytes(data.fileSize)})`;
+    el.incomingModal.classList.add('visible');
+});
 
-function showToast(message, type = 'info') {
-    const container = $('toast-container');
-    const toast = document.createElement('div');
-    toast.className = `toast ${type}`;
+// EDGE CASE: Sender disconnected while modal is open
+supergo.on('incomingFileCancelled', () => {
+    el.incomingModal.classList.remove('visible');
+    ui.showToast('Sender disconnected', 'error');
+});
 
-    const icons = { info: 'info', success: 'check-circle', error: 'warning-circle' };
-    toast.innerHTML = `<i class="ph ph-${icons[type]}"></i><span>${message}</span>`;
+el.acceptBtn.onclick = () => {
+    const data = supergo.incomingRequest;
+    if (!data) return;
 
-    container.appendChild(toast);
-    setTimeout(() => {
-        toast.classList.add('hiding');
-        setTimeout(() => toast.remove(), 300);
-    }, 3000);
-}
+    supergo.acceptFile(data.senderId, { fileName: data.fileName, fileSize: data.fileSize });
+    el.incomingModal.classList.remove('visible');
 
-// Cleanup on page unload
-window.addEventListener('beforeunload', () => engine.leaveRoom());
+    addTransferRecord(data.senderId, {
+        id: Date.now(), fileName: data.fileName, size: data.fileSize,
+        direction: 'incoming', status: 'receiving', percent: 0
+    });
+
+    // Auto-switch to sender's panel
+    if (selectedDeviceId !== data.senderId) {
+        const d = supergo.devices.find(x => x.id === data.senderId);
+        if (d) ui.openPanel(d);
+    }
+
+    updateDropZoneState();
+};
+
+el.rejectBtn.onclick = () => {
+    const data = supergo.incomingRequest;
+    if (data) supergo.rejectFile(data.senderId);
+    el.incomingModal.classList.remove('visible');
+};
+
+supergo.on('receiveProgress', d => {
+    updateActiveTransfer(d.senderId, { percent: d.percent, speed: d.speed });
+});
+
+supergo.on('fileReceived', ({ senderId, url, fileName }) => {
+    updateActiveTransfer(senderId, { status: 'completed', percent: 100 });
+    updateDropZoneState();
+
+    // Download
+    const a = document.createElement('a');
+    a.href = url; a.download = fileName; a.style.display = 'none';
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+
+    ui.showToast(`${fileName} received`, 'success');
+});
+
+el.backBtn.onclick = ui.closePanel;

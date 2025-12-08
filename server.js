@@ -3,145 +3,93 @@ const http = require('http');
 const socketio = require('socket.io');
 const path = require('path');
 
-const { ExpressPeerServer } = require('peer');
-
 const app = express();
 const server = http.createServer(app);
 const io = socketio(server, {
-    pingTimeout: 1800000,
-    pingInterval: 60000,
-    maxHttpBufferSize: 500 * 1024 * 1024, // 500MB max for file chunks
-    transports: ['websocket', 'polling'],
-    allowEIO3: true,
-    cors: {
-        origin: '*',
-        methods: ['GET', 'POST']
-    }
+    cors: { origin: "*", methods: ["GET", "POST"] },
+    maxHttpBufferSize: 1e8
 });
 
-// Main App (Socket.io + Static Files)
 const PORT = process.env.PORT || 3000;
-const HOST = '0.0.0.0';
 
 app.use(express.static(path.join(__dirname, 'public')));
 
-// PeerJS Server - Attached to main server
-const peerServerInstance = ExpressPeerServer(server, {
-    debug: true,
-    path: '/peerjs'
-});
-
-app.use(peerServerInstance);
-
-const sessions = {};
-const roomMembers = {};
+// Store all connected devices
+const devices = new Map(); // socketId -> { id, name, type }
 
 io.on('connection', (socket) => {
-    socket.on('create-session', (data) => {
-        const id = typeof data === 'object' ? data.id : data;
-        const access = typeof data === 'object' ? data.access : 'public';
-        const hostName = typeof data === 'object' ? data.hostName : 'Anonymous';
+    console.log('Device connected:', socket.id);
 
-        sessions[id] = { peerId: id, socketId: socket.id, access, hostName };
-        socket.join(id);
-        socket.roomId = id;
-
-        if (!roomMembers[id]) roomMembers[id] = new Set();
-        roomMembers[id].add(socket.id);
-
-        socket.emit('session-created', id);
-        broadcastSessions();
+    // Register device with auto-detected name
+    socket.on('register', (deviceInfo) => {
+        devices.set(socket.id, {
+            id: socket.id,
+            name: deviceInfo.name || 'Unknown Device',
+            type: deviceInfo.type || 'desktop'
+        });
+        broadcastDevices();
     });
 
-    socket.on('join-session', (id) => {
-        const session = sessions[id];
-        if (session) {
-            socket.join(id);
-            socket.roomId = id;
-
-            if (!roomMembers[id]) roomMembers[id] = new Set();
-            roomMembers[id].add(socket.id);
-
-            socket.emit('host-info', session.peerId);
-        } else {
-            socket.emit('session-error', 'Session not found');
-        }
+    // Get current devices
+    socket.on('get-devices', () => {
+        socket.emit('devices', getDeviceList(socket.id));
     });
 
-    socket.on('get-active-sessions', () => {
-        broadcastSessions(socket);
-    });
-
-    // ═══════════════════════════════════════════════════════════════
-    // WEBSOCKET FILE RELAY - Maximum Speed Mode
-    // ═══════════════════════════════════════════════════════════════
-
-    socket.on('ws-file-list', (data) => {
-        if (socket.roomId) {
-            socket.to(socket.roomId).emit('ws-file-list', {
-                senderId: socket.id,
-                files: data.files
-            });
-        }
-    });
-
-    socket.on('ws-request-file', (data) => {
-        if (socket.roomId) {
-            io.to(data.senderId).emit('ws-request-file', {
-                requesterId: socket.id,
-                fileIndex: data.fileIndex
-            });
-        }
-    });
-
-    // High-speed chunk relay
-    socket.on('ws-chunk', (data) => {
-        io.to(data.targetId).volatile.emit('ws-chunk', {
+    // File transfer via WebSocket relay
+    socket.on('send-file-info', (data) => {
+        io.to(data.targetId).emit('incoming-file', {
             senderId: socket.id,
-            fileIndex: data.fileIndex,
+            senderName: devices.get(socket.id)?.name || 'Unknown',
+            fileName: data.fileName,
+            fileSize: data.fileSize,
+            fileType: data.fileType
+        });
+    });
+
+    socket.on('accept-file', (data) => {
+        io.to(data.senderId).emit('file-accepted', {
+            targetId: socket.id
+        });
+    });
+
+    socket.on('reject-file', (data) => {
+        io.to(data.senderId).emit('file-rejected', {
+            targetId: socket.id
+        });
+    });
+
+    socket.on('file-chunk', (data) => {
+        io.to(data.targetId).volatile.emit('file-chunk', {
+            senderId: socket.id,
             data: data.data
         });
     });
 
-    socket.on('ws-file-end', (data) => {
-        io.to(data.targetId).emit('ws-file-end', {
-            senderId: socket.id,
-            fileIndex: data.fileIndex
+    socket.on('file-complete', (data) => {
+        io.to(data.targetId).emit('file-complete', {
+            senderId: socket.id
         });
     });
 
-    // ═══════════════════════════════════════════════════════════════
-
     socket.on('disconnect', () => {
-        if (socket.roomId && roomMembers[socket.roomId]) {
-            roomMembers[socket.roomId].delete(socket.id);
-            if (roomMembers[socket.roomId].size === 0) {
-                delete roomMembers[socket.roomId];
-            }
-        }
-
-        for (const id in sessions) {
-            if (sessions[id].socketId === socket.id) {
-                io.to(id).emit('peer-disconnected');
-                delete sessions[id];
-                broadcastSessions();
-                break;
-            }
-        }
+        console.log('Device disconnected:', socket.id);
+        devices.delete(socket.id);
+        broadcastDevices();
     });
-
-    const broadcastSessions = (targetSocket = io) => {
-        const activeSessions = Object.values(sessions).map(s => ({
-            id: s.access === 'public' ? s.peerId : null,
-            hostName: s.hostName,
-            access: s.access,
-            isSecure: s.access === 'private'
-        }));
-        targetSocket.emit('active-sessions', activeSessions);
-    };
 });
 
-server.listen(PORT, HOST, () => {
-    console.log(`Server running on http://${HOST}:${PORT}`);
-    console.log(`WebSocket transfer mode enabled (max speed)`);
+function getDeviceList(excludeId) {
+    return Array.from(devices.entries())
+        .filter(([id]) => id !== excludeId)
+        .map(([id, info]) => ({ id, ...info }));
+}
+
+function broadcastDevices() {
+    devices.forEach((_, socketId) => {
+        io.to(socketId).emit('devices', getDeviceList(socketId));
+    });
+}
+
+server.listen(PORT, '0.0.0.0', () => {
+    console.log(`SuperGO running on http://0.0.0.0:${PORT}`);
 });
