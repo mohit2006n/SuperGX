@@ -6,9 +6,7 @@ const DEFAULTS = {
     SPEED_LIMIT: 0,
     ICE_SERVERS: [
         { urls: 'stun:stun.l.google.com:19302' },
-        { urls: 'stun:stun1.l.google.com:19302' },
-        { urls: 'turn:openrelay.metered.ca:80', username: 'openrelayproject', credential: 'openrelayproject' },
-        { urls: 'turn:openrelay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject' }
+        { urls: 'stun:stun1.l.google.com:19302' }
     ]
 };
 
@@ -35,10 +33,13 @@ export class Supr {
 
         // Socket Events
         socket.on('connect', () => {
-            if (this.self) this.announce(this.self);
             if (this.roomId) this.socket.emit('join-room', this.roomId);
         });
         socket.on('peer-joined', ({ peerId }) => this.handlePeerJoined(peerId));
+        socket.on('peer-left', ({ peerId }) => {
+            this.closePeer(peerId);
+            this.emit('peerDisconnected', peerId);
+        });
 
         // WebRTC
         socket.on('rtc-offer', async d => {
@@ -126,7 +127,9 @@ export class Supr {
                 if (cfg.YIELD_INTERVAL && off % cfg.YIELD_INTERVAL === 0) await new Promise(r => setTimeout(r, 0));
             }, cfg.RTC_CHUNK_SIZE, targetId);
             dc.send('"done"');
+            console.log('Using: WebRTC (P2P) ⚡');
         } catch (e) {
+            console.log('Using: Socket (Relay) 🐢', e);
             // Fallback
             await this.stream(file, d => this.socket.emit('file-chunk', { targetId, data: d }), async () => {
                 if (performance.now() % 16 < 1) await new Promise(r => setTimeout(r, 0));
@@ -173,6 +176,13 @@ export class Supr {
 
         t.chunks.push(data);
         t.rx += data.byteLength;
+
+        // Auto-complete if we have all bytes
+        if (this.incoming && t.rx >= this.incoming.fileSize) {
+            this.receiveDone(id);
+            return;
+        }
+
         // Incremental Consolidation
         if (t.chunks.length >= 50) {
             (t.parts ||= []).push(new Blob(t.chunks)); t.chunks = [];
@@ -220,7 +230,7 @@ export class Supr {
         const p = this.getPeer(id);
         const c = p.createDataChannel('file', { ordered: true });
         return new Promise((res, rej) => {
-            const t = setTimeout(rej, 5000);
+            const t = setTimeout(rej, 15000); // 15s timeout for remote signaling
             c.onopen = () => { clearTimeout(t); this.setupChannel(id, c); res(c); };
             c.onerror = rej;
             p.createOffer().then(o => p.setLocalDescription(o)).then(() => this.socket.emit('rtc-offer', { targetId: id, offer: p.localDescription }));

@@ -1,6 +1,5 @@
 /* ZERO STYLING */
-.hidden,
-#peer-container {
+.hidden {
     display: none !important;
 }
 

@@ -19,6 +19,12 @@ io.on('connection', (socket) => {
         socket.to(roomId).emit('peer-joined', { peerId: socket.id });
     });
 
+    socket.on('disconnecting', () => {
+        socket.rooms.forEach(room => {
+            socket.to(room).emit('peer-left', { peerId: socket.id });
+        });
+    });
+
     // Signaling (Direct P2P routing)
     const route = (ev, data) => io.to(data.targetId).emit(ev, { ...data, senderId: socket.id });
 

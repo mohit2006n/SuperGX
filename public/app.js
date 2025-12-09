@@ -93,26 +93,29 @@ function initHost() {
     };
 
     // Events
+    // Peer Counting
+    const peers = new Set();
+    const updateCount = () => {
+        els.peerContainer.textContent = `${peers.size} Peer${peers.size === 1 ? '' : 's'} connected`;
+    };
+
     supr.on('peerJoined', (peerId) => {
-        // Add to peer list
-        const pill = document.createElement('div');
-        pill.className = 'peer-pill';
-        pill.innerHTML = '<div class="dot green"></div> Peer ' + peerId.substring(0, 4);
-        pill.id = `peer-${peerId}`;
-        els.peerContainer.appendChild(pill);
-        showToast('A peer joined!');
+        if (peers.has(peerId)) return;
+        peers.add(peerId);
+        updateCount();
+        showToast('A new peer connected!');
     });
 
-    supr.on('uploadProgress', d => {
-        // Find peer pill and show progress? For now just toast or minimal indicator
-        const pill = $(`peer-${d.targetId}`);
-        if (pill) pill.style.background = `linear-gradient(90deg, rgba(0,255,100,0.1) ${d.percent}%, var(--surface-2) ${d.percent}%)`;
+    supr.on('peerDisconnected', (peerId) => {
+        if (peers.has(peerId)) {
+            peers.delete(peerId);
+            updateCount();
+        }
     });
 
-    supr.on('transferComplete', d => {
-        const pill = $(`peer-${d.targetId}`);
-        if (pill) pill.innerHTML = '<div class="dot blue"></div> Complete';
-    });
+    // Remove progress visuals for peers since we only show count now
+    supr.on('uploadProgress', () => { });
+    supr.on('transferComplete', () => { });
 }
 
 // ─────────────────────────────────────────────────────────────
