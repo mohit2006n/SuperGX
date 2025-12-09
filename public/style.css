@@ -1,0 +1,36 @@
+/* ZERO STYLING */
+.hidden,
+#peer-container {
+    display: none !important;
+}
+
+/* Functional Layout Only */
+.app-container {
+    margin: 20px;
+}
+
+#drop-zone {
+    border: 2px dashed #000;
+    padding: 20px;
+    margin-bottom: 20px;
+    cursor: pointer;
+}
+
+#drop-zone.minimized {
+    border-style: solid;
+    padding: 10px;
+}
+
+/* Progress - ensure visible */
+.bar {
+    border: 1px solid #000;
+    height: 10px;
+    width: 200px;
+    margin-top: 10px;
+}
+
+.fill {
+    background: #000;
+    height: 100%;
+    width: 0%;
+}

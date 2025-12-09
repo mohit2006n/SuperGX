@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Supr</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500&display=swap" rel="stylesheet">
+    <script src="/socket.io/socket.io.js"></script>
+    <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+    <div class="app-container">
+        <!-- VIEW 1: HOST -->
+        <div id="view-host" class="view active">
+            <div id="drop-zone" class="box">
+                <span id="drop-text">Drop file here</span>
+                <input type="file" id="file-input" hidden>
+            </div>
+
+            <div id="share-info" class="hidden">
+                <h3 id="host-filename">filename.ext</h3>
+                <div class="input-group">
+                    <input type="text" id="share-link" readonly>
+                    <button id="copy-btn">Copy</button>
+                </div>
+                <div id="peer-container"></div>
+            </div>
+        </div>
+
+        <!-- VIEW 2: CLIENT -->
+        <div id="view-client" class="view hidden">
+            <div class="box client-box">
+                <span id="client-status">Connecting...</span>
+                <h2 id="client-filename"></h2>
+                <h4 id="client-filesize"></h4>
+                <button id="download-btn" class="btn-large" disabled>Download</button>
+
+                <div id="client-progress" class="hidden">
+                    <div class="bar">
+                        <div class="fill"></div>
+                    </div>
+                    <div class="meta">
+                        <span id="prog-percent">0%</span>
+                        <span id="prog-speed"></span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="toast-container"></div>
+    <script type="module" src="app.js"></script>
+</body>
+
+</html>
