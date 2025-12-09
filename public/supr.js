@@ -42,16 +42,28 @@ export class Supr {
         });
 
         // WebRTC
+        this.candidates = new Map(); // id -> []
         socket.on('rtc-offer', async d => {
             const p = this.getPeer(d.senderId);
             p.ondatachannel = e => this.setupChannel(d.senderId, e.channel);
+
             await p.setRemoteDescription(d.offer);
+            // Apply buffered candidates
+            if (this.candidates.has(d.senderId)) {
+                this.candidates.get(d.senderId).forEach(c => p.addIceCandidate(c));
+                this.candidates.delete(d.senderId);
+            }
+
             const ans = await p.createAnswer();
             await p.setLocalDescription(ans);
             socket.emit('rtc-answer', { targetId: d.senderId, answer: ans });
         });
         socket.on('rtc-answer', d => this.peers.get(d.senderId)?.setRemoteDescription(d.answer));
-        socket.on('rtc-ice-candidate', d => this.peers.get(d.senderId)?.addIceCandidate(d.candidate));
+        socket.on('rtc-ice-candidate', d => {
+            const p = this.peers.get(d.senderId);
+            if (p && p.remoteDescription) p.addIceCandidate(d.candidate);
+            else (this.candidates.get(d.senderId) || (this.candidates.set(d.senderId, []) && this.candidates.get(d.senderId))).push(d.candidate);
+        });
 
         // Transfer Handshake
         socket.on('incoming-file', d => {
@@ -123,7 +135,7 @@ export class Supr {
             // P2P
             const dc = await this.connectP2P(targetId);
             await this.stream(file, d => dc.send(d), async (off) => {
-                while (dc.bufferedAmount > cfg.BUFFER_LIMIT) await new Promise(r => setTimeout(r, 10));
+                while (dc.bufferedAmount > cfg.BUFFER_LIMIT) await new Promise(r => setTimeout(r, 0)); // Tight yield
                 if (cfg.YIELD_INTERVAL && off % cfg.YIELD_INTERVAL === 0) await new Promise(r => setTimeout(r, 0));
             }, cfg.RTC_CHUNK_SIZE, targetId);
             dc.send('"done"');
