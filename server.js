@@ -31,6 +31,8 @@ io.on('connection', (socket) => {
     socket.on('join-id', (id) => {
         const session = ids[id];
         if (session) {
+            socket.join(id);
+            socket.joinedRoom = id;
             socket.emit('sender-info', { senderId: session.senderId });
             // Notify sender that a peer joined (for UI count)
             io.to(session.senderId).emit('peer-joined', { peerId: socket.id });
@@ -43,18 +45,9 @@ io.on('connection', (socket) => {
         if (socket.isSender && socket.shareId && ids[socket.shareId]) {
             io.to(socket.shareId).emit('peer-disconnected', { message: 'Host disconnected' });
             delete ids[socket.shareId];
-        } else {
-            // If checking for client disconnects to update host count
-            // We'd need to track which room the socket joined or broadcast to all?
-            // For simplicity/speed, we let the P2P connection failure handle logical disconnect
-            // But to update the Host UI count, we might need a map. 
-            // The example code didn't handle Client->Host disconnect notifications explicitly for UI, 
-            // but my previous code did. I'll add a simple broadcast.
-            // A client doesn't "own" an ID, but they joined a room (via join-id? no, socket.join(id) happens in create-id ONLY for sender in example)
-            // Wait, in example, only Sender calls socket.join(id). Receiver DOES NOT join the room.
-            // So socket.to(id) only sends to Sender? No, sender IS in the room. 
-            // If Receiver doesn't join the room, how does Sender know they left?
-            // I will add `socket.join(id)` to join-id as well for notifications.
+        } else if (socket.joinedRoom) {
+            // Notify Host that a peer left
+            io.to(socket.joinedRoom).emit('peer-disconnected', { peerId: socket.id });
         }
     });
 
